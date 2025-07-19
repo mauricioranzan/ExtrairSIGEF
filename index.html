@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Extrator SIGEF/INCRA - Multi-Gleba com Exportação Avançada</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 30px; background: #f6faf9; }
+    textarea { width: 100%; min-height: 180px; font-family: monospace; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; }
+    th { background: #e3e3e3; }
+    .btn { margin: 0 8px 8px 0; padding: 6px 12px; font-size: 0.98rem; cursor: pointer; background: #28807a; color: white; border: none; border-radius: 6px;}
+    .btn:active { background: #16605b; }
+    .output { margin-top: 22px; }
+    .denom { font-weight: bold; color: #114d44; margin-top: 25px; font-size: 1.15em;}
+    .separador {margin: 20px 0;}
+    .btns-topo { margin: 10px 0 4px 0; }
+  </style>
+</head>
+<body>
+  <h1>Extrator Memorial SIGEF/INCRA (Multi-Gleba)</h1>
+  <label for="entrada">Cole o texto completo do memorial SIGEF/INCRA (com várias glebas):</label>
+  <textarea id="entrada" placeholder="Cole aqui o texto completo..."></textarea>
+  <button class="btn" onclick="extrair()">Extrair Dados</button>
+  <button class="btn" id="btnExportarTudo" style="display:none" onclick="exportarTudo()">Exportar TXT com todas as seções</button>
+  <div id="resultado" class="output"></div>
+  <script>
+    let txtTodasSecoes = "";
+
+    function sanitizarNome(nome) {
+      return nome.replace(/[^a-z0-9]/gi, "_").replace(/_+/g,"_");
+    }
+
+    function padronizaDecimal(valor) {
+      if (typeof valor !== 'string') return valor;
+      if (
+        /^-?\d+\.\d+$/.test(valor) ||
+        /^-?\d+,\d+$/.test(valor) ||
+        /^-?\d+\.\d+(?:\s*m)?$/.test(valor) ||
+        /^-?\d+,\d+(?:\s*m)?$/.test(valor)
+      ) {
+        return valor.replace('.', ',');
+      }
+      if (/^-?\d+\.\d+"?$/.test(valor)) {
+        return valor.replace('.', ',');
+      }
+      return valor;
+    }
+
+    async function exportarTXTDialogo(conteudo, nomeArquivo) {
+      if (window.showSaveFilePicker) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: nomeArquivo,
+            types: [{
+              description: 'Arquivo de texto',
+              accept: {'text/plain': ['.txt']}
+            }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(conteudo);
+          await writable.close();
+          return;
+        } catch(e) { /* Usuário pode cancelar */ }
+      }
+      exportarTXTDownload(conteudo, nomeArquivo);
+    }
+
+    function exportarTXTDownload(conteudo, nomeArquivo) {
+      const blob = new Blob([conteudo], {type: "text/plain"});
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = nomeArquivo;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(a.href);
+      }, 200);
+    }
+
+    async function exportarTudo() {
+      if (txtTodasSecoes) {
+        await exportarTXTDialogo(txtTodasSecoes, "roteiro_todas_secoes.txt");
+      }
+    }
+
+    function extrair() {
+      const texto = document.getElementById('entrada').value;
+      let secoes = texto.split(/(?=Denominação:)/i).map(s => s.trim()).filter(Boolean);
+      let html = "";
+      const regex = /(\S+)\s+([-\d°'",\.]+)\s+([-\d°'",\.]+)\s+([\d\.,]+)\s+\S+\s+([\d°'"]+)\s+([\d\.,]+)\s+(.+)/g;
+      let listaTXT = [];
+      secoes.forEach((secao, idx) => {
+        let denom = (secao.match(/Denominação:\s*([^\n\r]+)/i)||[])[1] || 'Seção_sem_denominação';
+        html += `<div class="denom">Denominação: ${denom}</div>`;
+        let linhas = [];
+        let match;
+        while ((match = regex.exec(secao)) !== null) {
+          let linhaCorrigida = [
+            match[1],                               // Código vértice
+            match[2],                               // Longitude (pode ser angular)
+            match[3],                               // Latitude (pode ser angular)
+            padronizaDecimal(match[4]),             // Altitude (decimal)
+            match[5],                               // Azimute
+            padronizaDecimal(match[6]),             // Distância (decimal)
+            match[7]                                // Confrontação (mantém na linha)
+          ];
+          if (!/°/.test(linhaCorrigida[1])) linhaCorrigida[1] = padronizaDecimal(linhaCorrigida[1]);
+          if (!/°/.test(linhaCorrigida[2])) linhaCorrigida[2] = padronizaDecimal(linhaCorrigida[2]);
+          linhas.push(linhaCorrigida);
+        }
+        if (linhas.length > 0) {
+          // Cabeçalho SEM "Confrontação"
+          const txt = ["Vértice;Longitude;Latitude;Altitude;Azimute;Distância"]
+            .concat(linhas.map(row => row.join(";")))
+            .join("\n");
+          listaTXT.push(`# ${denom}\n${txt}`);
+          html += `<div class="btns-topo">
+            <button class="btn btn-exp" data-txt="${encodeURIComponent(txt)}" data-nome="${sanitizarNome(denom)}.txt">Exportar TXT dessa seção</button>
+            <button class="btn btn-copiar" data-txt="${encodeURIComponent(txt)}">Copiar roteiro dessa gleba</button>
+          </div>`;
+          // Tabela com 7 colunas (sem header da última)
+          html += `<table><tr>
+            <th>Vértice</th><th>Longitude</th><th>Latitude</th><th>Altitude</th>
+            <th>Azimute</th><th>Distância</th><th style="background:#f6faf9;border:none"></th>
+            </tr>`;
+          linhas.forEach(row => {
+            html += `<tr>${row.map(col=>`<td>${col}</td>`).join('')}</tr>`;
+          });
+          html += `</table>`;
+          html += `<pre style="margin-top:8px; background:#f9f9f9">${txt}</pre>`;
+        } else {
+          html += "<b style='color:red'>Nenhuma linha de roteiro encontrada nesta seção.</b>";
+        }
+        html += `<div class="separador"></div>`;
+      });
+      txtTodasSecoes = listaTXT.join("\n\n");
+      document.getElementById('btnExportarTudo').style.display = (listaTXT.length > 0) ? "inline-block" : "none";
+      document.getElementById('resultado').innerHTML = html;
+
+      setTimeout(() => {
+        document.querySelectorAll('.btn-exp').forEach(btn => {
+          btn.onclick = async function() {
+            const txt = decodeURIComponent(this.getAttribute('data-txt'));
+            const nome = this.getAttribute('data-nome');
+            await exportarTXTDialogo(txt, nome);
+          }
+        });
+        document.querySelectorAll('.btn-copiar').forEach(btn => {
+          btn.onclick = function() {
+            const txt = decodeURIComponent(this.getAttribute('data-txt'));
+            navigator.clipboard.writeText(txt);
+          }
+        });
+      }, 100);
+    }
+
+    window.exportarTXTDialogo = exportarTXTDialogo;
+    window.exportarTudo = exportarTudo;
+  </script>
+</body>
+</html>
